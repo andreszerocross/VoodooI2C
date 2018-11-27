@@ -42,6 +42,13 @@ void VoodooI2CMT2SimulatorDevice::constructReportGated(VoodooI2CMultitouchEvent&
     
     // physical button
     pointing_wrapper->updateRelativeMouse(0,0,transducer->physical_button.value() & 0x1);
+    
+    /*
+    if (multitouch_device_preferences) {
+        OSBoolean* tap_preference = OSDynamicCast(OSBoolean, multitouch_device_preferences->getObject("Clicking"));
+        multitouch_device_preferences->setObject("Clicking", OSBoolean::withBoolean(tap_preference->getValue() & !transducer->physical_button.value()));
+    }
+     */
 
     if (transducer->physical_button.value())
         input_report.Button = transducer->physical_button.value();
@@ -49,7 +56,7 @@ void VoodooI2CMT2SimulatorDevice::constructReportGated(VoodooI2CMultitouchEvent&
     // touch active
     
     // multitouch report id
-    input_report.multitouch_report_id = 0x31; //Magic
+        input_report.multitouch_report_id = 0x31; //Magic
     
     // timestamp
     AbsoluteTime relative_timestamp = timestamp;
@@ -217,7 +224,9 @@ void VoodooI2CMT2SimulatorDevice::constructReportGated(VoodooI2CMultitouchEvent&
     buffer_report->writeBytes(0, &input_report, total_report_len);
     
     handleReport(buffer_report, kIOHIDReportTypeInput);
-    
+    buffer_report->release();
+    buffer_report = NULL;
+
     if (!input_active) {
         input_report.FINGERS[0].Size = 0x0;
         input_report.FINGERS[0].Pressure = 0x0;
@@ -229,38 +238,31 @@ void VoodooI2CMT2SimulatorDevice::constructReportGated(VoodooI2CMultitouchEvent&
         input_report.timestamp_buffer[0] = (milli_timestamp << 0x3) | 0x4;
         input_report.timestamp_buffer[1] = (milli_timestamp >> 0x5) & 0xFF;
         input_report.timestamp_buffer[2] = (milli_timestamp >> 0xd) & 0xFF;
-        
-        buffer_report = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, 0, total_report_len);
-        buffer_report->writeBytes(0, &input_report, total_report_len);
-        
-        input_report.FINGERS[0].AbsY[1] &= ~0xF4;
-        input_report.FINGERS[0].AbsY[1] |= 0x14;
-        
-        buffer_report = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, 0, total_report_len);
-        buffer_report->writeBytes(0, &input_report, total_report_len);
-
-        milli_timestamp += 10;
-        
-        input_report.timestamp_buffer[0] = (milli_timestamp << 0x3) | 0x4;
-        input_report.timestamp_buffer[1] = (milli_timestamp >> 0x5) & 0xFF;
-        input_report.timestamp_buffer[2] = (milli_timestamp >> 0xd) & 0xFF;
-
-        buffer_report = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, 0, total_report_len);
-        buffer_report->writeBytes(0, &input_report, total_report_len);
-
-        milli_timestamp += 10;
-        
-        input_report.timestamp_buffer[0] = (milli_timestamp << 0x3) | 0x4;
-        input_report.timestamp_buffer[1] = (milli_timestamp >> 0x5) & 0xFF;
-        input_report.timestamp_buffer[2] = (milli_timestamp >> 0xd) & 0xFF;
 
         buffer_report = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, 0, 12);
         buffer_report->writeBytes(0, &input_report, 12);
         handleReport(buffer_report, kIOHIDReportTypeInput);
-
+        buffer_report->release();
     }
     
     input_report = {};
+}
+
+bool VoodooI2CMT2SimulatorDevice::getMultitouchPreferences(void* target, void* ref_con, IOService* multitouch_device, IONotifier* notifier) {
+    VoodooI2CMT2SimulatorDevice* simulator = (VoodooI2CMT2SimulatorDevice*)target;
+    
+    IOLog("VoodooI2C: Got multitouch matched\n");
+    
+    simulator->multitouch_device_preferences = OSDynamicCast(OSDictionary, simulator->getProperty("MultitouchPreferences", gIOServicePlane, kIORegistryIterateRecursively));
+
+        if (simulator->multitouch_device_preferences) {
+            IOLog("VoodooI2C: Got multitouch preferences\n");
+            
+            simulator->multitouch_device_notifier->disable();
+            simulator->multitouch_device_notifier->remove();
+        }
+
+    return true;
 }
 
 bool VoodooI2CMT2SimulatorDevice::start(IOService* provider) {
@@ -313,7 +315,9 @@ bool VoodooI2CMT2SimulatorDevice::start(IOService* provider) {
         pointing_wrapper = NULL;
         return false;
     }
-
+    
+    multitouch_device_notifier = addMatchingNotification(gIOFirstPublishNotification, IOService::serviceMatching("AppleMultitouchDevice"), VoodooI2CMT2SimulatorDevice::getMultitouchPreferences, this, NULL, 0);
+    
     ready_for_reports = true;
     
     return true;
